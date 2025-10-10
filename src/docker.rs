@@ -11,7 +11,7 @@ use termion::{async_stdin, raw::IntoRawMode, terminal_size};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 
-use crate::print_error;
+use crate::{Args, print_error};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -45,6 +45,12 @@ pub enum Error {
 	#[error("could not resize exec: {0}")]
 	ExecResize(bollard::errors::Error),
 
+	#[error("could not inspect exec: {0}")]
+	ExecInspect(bollard::errors::Error),
+
+	#[error("could not exit code")]
+	ExecExitcode,
+
 	#[error("could not set raw mode: {0}")]
 	Rawmode(std::io::Error),
 
@@ -56,34 +62,10 @@ pub enum Error {
 
 	#[error("could not delete container: {0}")]
 	ContainerDelete(bollard::errors::Error),
+
+	#[error("could not get cwd: {0}")]
+	GetCWD(std::io::Error),
 }
-
-// struct Tasks {
-// 	pb: ProgressBar,
-// 	total: usize,
-// 	cur: usize,
-// }
-
-// impl Tasks {
-// 	fn new(total: usize, pb: ProgressBar) -> Self {
-// 		return Self { total, pb, cur: 0 };
-// 	}
-
-// 	fn start(&self) {
-// 		self.pb.enable_steady_tick(Duration::from_millis(50));
-// 	}
-
-// 	async fn next(&mut self, msg: String) {
-// 		self.cur += 1;
-// 		self.pb.set_message(msg);
-// 		self.pb.set_prefix(format!("[{}/{}]", self.cur, self.total));
-// 		tokio::time::sleep(Duration::from_millis(250)).await;
-// 	}
-
-// 	fn finish(&self) {
-// 		self.pb.finish_and_clear();
-// 	}
-// }
 
 #[derive(Default)]
 pub struct Context {
@@ -100,7 +82,7 @@ impl Context {
 		return self.docker.as_ref().ok_or(Error::NotConnected);
 	}
 
-	pub async fn perform_all_enter(&self) -> Result<(), Error> {
+	pub async fn perform_all_enter(&self, args: &Args) -> Result<(), Error> {
 		let m = MultiProgress::new();
 		let total = 5;
 		let spinner = m.add(ProgressBar::new_spinner().with_style(ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.blue} {msg}...").unwrap()));
@@ -108,27 +90,36 @@ impl Context {
 			spinner.set_message("Downloading image");
 			spinner.set_prefix(format!("[1/{total}]"));
 			spinner.enable_steady_tick(Duration::from_millis(50));
-			tokio::time::sleep(Duration::from_millis(250)).await;
 			self.pull_image(&m).await?;
 		}
 		let id = {
 			spinner.set_message("Creating system");
 			spinner.set_prefix(format!("[2/{total}]"));
-			tokio::time::sleep(Duration::from_millis(250)).await;
-			self.create_container().await?
+			self.create_container(args.no_network, args.privileged, args.ro_root, args.ro_cwd, !args.disable_cwd_mount)
+				.await?
 		};
 		{
 			spinner.set_message("Starting system");
 			spinner.set_prefix(format!("[3/{total}]"));
-			tokio::time::sleep(Duration::from_millis(250)).await;
 			self.start_container(&id).await?;
 		}
 		let exec_id = {
 			spinner.set_message("Executing");
 			spinner.set_prefix(format!("[4/{total}]"));
-			tokio::time::sleep(Duration::from_millis(250)).await;
-			self.create_exec(&id, "SHOW_WELCOME=true /usr/bin/zsh".into())
+			if args.command.len() == 1 && args.command[0] == "/usr/bin/zsh" {
+				self.create_exec(&id, "SHOW_WELCOME=true /usr/bin/zsh".into())
+					.await?
+			} else {
+				self.create_exec(
+					&id,
+					args.command
+						.iter()
+						.map(|s| s.escape_default().to_string())
+						.collect::<Vec<String>>()
+						.join(" "),
+				)
 				.await?
+			}
 		};
 		spinner.finish_and_clear();
 		m.remove(&spinner);
@@ -184,7 +175,7 @@ impl Context {
 		return Ok(exec);
 	}
 
-	async fn start_exec(&self, exec_id: &str) -> Result<(), Error> {
+	async fn start_exec(&self, exec_id: &str) -> Result<i64, Error> {
 		let docker = self.get_docker()?;
 		let (mut output, mut input) = if let bollard::exec::StartExecResults::Attached { output, input } = docker
 			.start_exec(exec_id, None)
@@ -232,7 +223,11 @@ impl Context {
 			stdout.flush().map_err(Error::StdoutFlush)?;
 		}
 
-		return Ok(());
+		let inspect = docker
+			.inspect_exec(exec_id)
+			.await
+			.map_err(Error::ExecInspect)?;
+		return inspect.exit_code.ok_or(Error::ExecExitcode);
 	}
 
 	async fn pull_image(&self, m: &MultiProgress) -> Result<(), Error> {
@@ -290,14 +285,32 @@ impl Context {
 		return Ok(());
 	}
 
-	async fn create_container(&self) -> Result<String, Error> {
+	async fn create_container(&self, network_disabled: bool, privileged: bool, ro_root: bool, ro_cwd: bool, mount_cwd: bool) -> Result<String, Error> {
 		let docker = self.get_docker()?;
+		let binds = if mount_cwd {
+			if ro_cwd {
+				vec![format!("{}:/home/tempsystem/work:ro", std::env::current_dir().map_err(Error::GetCWD)?.display())]
+			} else {
+				vec![format!("{}:/home/tempsystem/work", std::env::current_dir().map_err(Error::GetCWD)?.display())]
+			}
+		} else {
+			vec![]
+		};
 		let id = docker
 			.create_container(
 				None::<bollard::query_parameters::CreateContainerOptions>,
 				bollard::models::ContainerCreateBody {
 					image: Some("codeberg.org/land/tempsystem:latest".to_string()),
 					tty: Some(true),
+					hostname: Some("tempsystem".into()),
+					network_disabled: Some(network_disabled),
+					host_config: Some(bollard::secret::HostConfig {
+						dns: Some(vec!["1.1.1.1".into(), "1.0.0.1".into()]),
+						privileged: Some(privileged),
+						readonly_rootfs: Some(ro_root),
+						binds: Some(binds),
+						..Default::default()
+					}),
 					..Default::default()
 				},
 			)
