@@ -39,6 +39,9 @@ pub enum Error {
 	#[error("exec was expected to be attached")]
 	ExpectedAttached,
 
+	#[error("exec was expected to be detached")]
+	ExpectedDetached,
+
 	#[error("could not recv terminal size: {0}")]
 	TerminalSize(std::io::Error),
 
@@ -48,9 +51,8 @@ pub enum Error {
 	#[error("could not inspect exec: {0}")]
 	ExecInspect(bollard::errors::Error),
 
-	#[error("could not exit code")]
-	ExecExitcode,
-
+	// #[error("could not get exit code")]
+	// ExecExitcode,
 	#[error("could not set raw mode: {0}")]
 	Rawmode(std::io::Error),
 
@@ -65,12 +67,25 @@ pub enum Error {
 
 	#[error("could not get cwd: {0}")]
 	GetCWD(std::io::Error),
+
+	#[error("package `{0}` does not exist")]
+	PackageDNE(String),
+
+	#[error("failed to install package: {0}")]
+	PackageInstall(i64),
+
+	#[error("failed to update system: {0}")]
+	SystemUpdate(i64),
 }
 
 #[derive(Default)]
 pub struct Context {
 	docker: Option<Docker>,
+	container_id: String,
 }
+
+unsafe impl Send for Context {}
+unsafe impl Sync for Context {}
 
 impl Context {
 	pub fn connect(&mut self) -> Result<(), Error> {
@@ -82,9 +97,78 @@ impl Context {
 		return self.docker.as_ref().ok_or(Error::NotConnected);
 	}
 
-	pub async fn perform_all_enter(&self, args: &Args) -> Result<(), Error> {
+	async fn install_packages(&self, spinner: &ProgressBar, current_task: usize, total_tasks: usize, packages: &str) -> Result<(), Error> {
+		for (i, pkg) in packages.split_whitespace().enumerate() {
+			spinner.set_message(format!("Installing {pkg}"));
+			spinner.set_prefix(format!("[{}/{total_tasks}]", i + current_task));
+			let exec_id = self
+				.create_exec(format!("/bin/pacman -Ssq \"^{pkg}$\""), false)
+				.await?;
+			let status = self.start_exec(&exec_id, false).await?;
+			if status != 0 {
+				return Err(Error::PackageDNE(pkg.to_string()));
+			}
+			let exec_id = self
+				.create_exec(format!("/bin/sudo /bin/pacman -S --needed --noconfirm {pkg}"), false)
+				.await?;
+			let status = self.start_exec(&exec_id, false).await?;
+			if status != 0 {
+				return Err(Error::PackageInstall(status));
+			}
+		}
+
+		return Ok(());
+	}
+
+	async fn install_aur_packages(&self, spinner: &ProgressBar, current_task: usize, total_tasks: usize, packages: &str) -> Result<(), Error> {
+		for (i, pkg) in packages.split_whitespace().enumerate() {
+			spinner.set_message(format!("Installing {pkg} from AUR"));
+			spinner.set_prefix(format!("[{}/{total_tasks}]", i + current_task));
+			let exec_id = self
+				.create_exec(format!("/bin/yay --aur -Ssq \"^{pkg}$\""), false)
+				.await?;
+			let status = self.start_exec(&exec_id, false).await?;
+			if status != 0 {
+				return Err(Error::PackageDNE(pkg.to_string()));
+			}
+			let exec_id = self
+				.create_exec(format!("/bin/yay --sync --needed --noconfirm --noprogressbar {pkg}"), false)
+				.await?;
+			let status = self.start_exec(&exec_id, false).await?;
+			if status != 0 {
+				return Err(Error::PackageInstall(status));
+			}
+		}
+
+		return Ok(());
+	}
+
+	async fn update_system(&self) -> Result<(), Error> {
+		let exec_id = self
+			.create_exec("/bin/sudo /bin/pacman -Syu --noconfirm".into(), false)
+			.await?;
+		let status = self.start_exec(&exec_id, false).await?;
+		if status != 0 {
+			return Err(Error::SystemUpdate(status));
+		}
+
+		return Ok(());
+	}
+
+	pub async fn perform_all_enter(&mut self, args: &Args) -> Result<i64, Error> {
 		let m = MultiProgress::new();
-		let total = 5;
+		let total = 5
+			+ args
+				.extra_packages
+				.as_ref()
+				.unwrap_or(&"".to_string())
+				.split_whitespace()
+				.count() + args
+			.extra_aur_packages
+			.as_ref()
+			.unwrap_or(&"".to_string())
+			.split_whitespace()
+			.count() + args.update_system as usize;
 		let spinner = m.add(ProgressBar::new_spinner().with_style(ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.blue} {msg}...").unwrap()));
 		{
 			spinner.set_message("Downloading image");
@@ -92,7 +176,7 @@ impl Context {
 			spinner.enable_steady_tick(Duration::from_millis(50));
 			self.pull_image(&m).await?;
 		}
-		let id = {
+		self.container_id = {
 			spinner.set_message("Creating system");
 			spinner.set_prefix(format!("[2/{total}]"));
 			self.create_container(args.no_network, args.privileged, args.ro_root, args.ro_cwd, !args.disable_cwd_mount)
@@ -101,48 +185,61 @@ impl Context {
 		{
 			spinner.set_message("Starting system");
 			spinner.set_prefix(format!("[3/{total}]"));
-			self.start_container(&id).await?;
+			self.start_container().await?;
+		}
+		if args.update_system {
+			spinner.set_message("Updating system");
+			spinner.set_prefix(format!("[4/{total}]"));
+			self.update_system().await?;
+		}
+		if let Some(pkgs) = &args.extra_packages {
+			self.install_packages(&spinner, 4 + args.update_system as usize, total, pkgs)
+				.await?;
+		}
+		if let Some(pkgs) = &args.extra_aur_packages {
+			self.install_aur_packages(&spinner, 5 + args.update_system as usize, total, pkgs)
+				.await?;
 		}
 		let exec_id = {
 			spinner.set_message("Executing");
-			spinner.set_prefix(format!("[4/{total}]"));
+			spinner.set_prefix(format!("[{}/{total}]", total - 1));
 			if args.command.len() == 1 && args.command[0] == "/usr/bin/zsh" {
-				self.create_exec(&id, "SHOW_WELCOME=true /usr/bin/zsh".into())
+				self.create_exec("SHOW_WELCOME=true /usr/bin/zsh".into(), true)
 					.await?
 			} else {
 				self.create_exec(
-					&id,
 					args.command
 						.iter()
 						.map(|s| s.escape_default().to_string())
 						.collect::<Vec<String>>()
 						.join(" "),
+					true,
 				)
 				.await?
 			}
 		};
 		spinner.finish_and_clear();
 		m.remove(&spinner);
-		self.start_exec(&exec_id).await?;
+		let exit_code = self.start_exec(&exec_id, true).await?;
 
 		let spinner = m.add(ProgressBar::new_spinner().with_style(ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.blue} {msg}...").unwrap()));
 		{
 			spinner.set_message("Deleting system");
-			spinner.set_prefix(format!("[5/{total}]"));
+			spinner.set_prefix(format!("[{total}/{total}]"));
 			spinner.enable_steady_tick(Duration::from_millis(50));
 			tokio::time::sleep(Duration::from_millis(250)).await;
-			self.delete_container(&id).await?;
+			self.delete_container().await?;
 		}
 		spinner.finish_and_clear();
 		m.remove(&spinner);
-		return Ok(());
+		return Ok(exit_code);
 	}
 
-	async fn delete_container(&self, id: &str) -> Result<(), Error> {
+	pub async fn delete_container(&self) -> Result<(), Error> {
 		let docker = self.get_docker()?;
 		docker
 			.remove_container(
-				id,
+				&self.container_id,
 				Some(
 					bollard::query_parameters::RemoveContainerOptionsBuilder::default()
 						.force(true)
@@ -155,16 +252,17 @@ impl Context {
 		return Ok(());
 	}
 
-	async fn create_exec(&self, id: &str, command: String) -> Result<String, Error> {
+	async fn create_exec(&self, command: String, attach: bool) -> Result<String, Error> {
 		let docker = self.get_docker()?;
 		let exec = docker
 			.create_exec(
-				id,
+				&self.container_id,
 				bollard::models::ExecConfig {
-					attach_stdout: Some(true),
-					attach_stderr: Some(true),
-					attach_stdin: Some(true),
-					tty: Some(true),
+					attach_stdout: Some(attach),
+					attach_stderr: Some(attach),
+					attach_stdin: Some(attach),
+					user: Some("tempsystem".into()),
+					tty: Some(attach),
 					cmd: Some(vec!["/usr/bin/zsh".into(), "-c".into(), format!("{command}")]),
 					..Default::default()
 				},
@@ -175,59 +273,78 @@ impl Context {
 		return Ok(exec);
 	}
 
-	async fn start_exec(&self, exec_id: &str) -> Result<i64, Error> {
+	async fn start_exec(&self, exec_id: &str, attach: bool) -> Result<i64, Error> {
 		let docker = self.get_docker()?;
-		let (mut output, mut input) = if let bollard::exec::StartExecResults::Attached { output, input } = docker
+		if attach {
+			let (mut output, mut input) = if let bollard::exec::StartExecResults::Attached { output, input } = docker
+				.start_exec(exec_id, None)
+				.await
+				.map_err(Error::ExecStart)?
+			{
+				(output, input)
+			} else {
+				return Err(Error::ExpectedAttached);
+			};
+			tokio::task::spawn(async move {
+				#[allow(clippy::unbuffered_bytes)]
+				let mut stdin = async_stdin().bytes();
+				loop {
+					if let Some(Ok(byte)) = stdin.next()
+						&& let Err(e) = input.write_all(&[byte]).await
+					{
+						print_error!("failed to write to exec's stdin", e);
+						break;
+					} else {
+						tokio::time::sleep(Duration::from_nanos(10)).await;
+					}
+				}
+			});
+
+			let tty_size = terminal_size().map_err(Error::TerminalSize)?;
+			docker
+				.resize_exec(
+					exec_id,
+					bollard::query_parameters::ResizeExecOptionsBuilder::default()
+						.h(tty_size.1 as i32)
+						.w(tty_size.0 as i32)
+						.build(),
+				)
+				.await
+				.map_err(Error::ExecResize)?;
+
+			let stdout = std::io::stdout();
+			let mut stdout = stdout.lock().into_raw_mode().map_err(Error::Rawmode)?;
+
+			while let Some(Ok(output)) = output.next().await {
+				stdout
+					.write_all(output.into_bytes().as_ref())
+					.map_err(Error::StdoutWrite)?;
+				stdout.flush().map_err(Error::StdoutFlush)?;
+			}
+		} else if let bollard::exec::StartExecResults::Detached = docker
 			.start_exec(exec_id, None)
 			.await
 			.map_err(Error::ExecStart)?
 		{
-			(output, input)
+			return Err(Error::ExpectedDetached);
 		} else {
-			return Err(Error::ExpectedAttached);
-		};
-		tokio::task::spawn(async move {
-			#[allow(clippy::unbuffered_bytes)]
-			let mut stdin = async_stdin().bytes();
 			loop {
-				if let Some(Ok(byte)) = stdin.next()
-					&& let Err(e) = input.write_all(&[byte]).await
-				{
-					print_error!("failed to write to exec's stdin", e);
+				let inspect = docker
+					.inspect_exec(exec_id)
+					.await
+					.map_err(Error::ExecInspect)?;
+				if !inspect.running.unwrap() {
 					break;
-				} else {
-					tokio::time::sleep(Duration::from_nanos(10)).await;
 				}
+				tokio::time::sleep(Duration::from_millis(300)).await;
 			}
-		});
-
-		let tty_size = terminal_size().map_err(Error::TerminalSize)?;
-		docker
-			.resize_exec(
-				exec_id,
-				bollard::query_parameters::ResizeExecOptionsBuilder::default()
-					.h(tty_size.1 as i32)
-					.w(tty_size.0 as i32)
-					.build(),
-			)
-			.await
-			.map_err(Error::ExecResize)?;
-
-		let stdout = std::io::stdout();
-		let mut stdout = stdout.lock().into_raw_mode().map_err(Error::Rawmode)?;
-
-		while let Some(Ok(output)) = output.next().await {
-			stdout
-				.write_all(output.into_bytes().as_ref())
-				.map_err(Error::StdoutWrite)?;
-			stdout.flush().map_err(Error::StdoutFlush)?;
 		}
 
 		let inspect = docker
 			.inspect_exec(exec_id)
 			.await
 			.map_err(Error::ExecInspect)?;
-		return inspect.exit_code.ok_or(Error::ExecExitcode);
+		return Ok(inspect.exit_code.unwrap_or(0));
 	}
 
 	async fn pull_image(&self, m: &MultiProgress) -> Result<(), Error> {
@@ -321,10 +438,10 @@ impl Context {
 		return Ok(id);
 	}
 
-	async fn start_container(&self, id: &str) -> Result<(), Error> {
+	async fn start_container(&self) -> Result<(), Error> {
 		let docker = self.get_docker()?;
 		docker
-			.start_container(id, None::<bollard::query_parameters::StartContainerOptions>)
+			.start_container(&self.container_id, None::<bollard::query_parameters::StartContainerOptions>)
 			.await
 			.map_err(Error::ContainerStart)?;
 

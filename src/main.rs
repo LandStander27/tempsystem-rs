@@ -24,10 +24,10 @@ struct Args {
 		long,
 		help = "extra packages to install in the system, space deliminated (cannot be used with --no-network or --ro-root)"
 	)]
-	extra_packages: bool,
+	extra_packages: Option<String>,
 
 	#[arg(short = 'a', long, help = "same as --extra-packages, but fetches the packages from the AUR")]
-	extra_aur_packages: bool,
+	extra_aur_packages: Option<String>,
 
 	#[arg(long, help = "give extended privileges to the system")]
 	privileged: bool,
@@ -38,6 +38,7 @@ struct Args {
 
 mod docker;
 use docker::*;
+use tokio_util::sync::CancellationToken;
 
 #[macro_export]
 macro_rules! print_error {
@@ -52,15 +53,42 @@ macro_rules! print_error {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> std::process::ExitCode {
 	let args = Args::parse();
+
+	let token = CancellationToken::new();
+	let token_clone = token.clone();
+	tokio::task::spawn(async move {
+		if tokio::signal::ctrl_c().await.is_ok() {
+			token_clone.cancel();
+		}
+	});
 
 	let mut context = Context::default();
 	if let Err(e) = context.connect() {
 		print_error!(e);
 	}
 
-	if let Err(e) = context.perform_all_enter(&args).await {
-		print_error!(e);
+	tokio::select! {
+		_ = token.cancelled() => {
+			if let Err(e) = context.delete_container().await {
+				print_error!("could not delete system after error", e);
+			}
+		}
+		ret = context.perform_all_enter(&args) => {
+			match ret {
+				Err(e) => {
+					print_error!(e);
+					if let Err(e) = context.delete_container().await {
+						print_error!("could not delete system after error", e);
+					}
+				}
+				Ok(code) => {
+					return (code as u8).into();
+				}
+			}
+		}
 	}
+
+	return 0.into();
 }
