@@ -23,7 +23,7 @@ jobs:
             DOCKER_TLS_CERTDIR: ""
     steps:
       - name: Install deps
-        run: find /var/cache/pacman/pkg/ -iname "*.part" -delete && pacman --noconfirm -Sy git nodejs curl docker docker-buildx
+        run: pacman --noconfirm -Sy git nodejs curl docker docker-buildx
 
       - name: Wait for Docker daemon
         run: |
