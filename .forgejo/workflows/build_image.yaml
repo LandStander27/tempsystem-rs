@@ -1,0 +1,54 @@
+name: Build and publish package
+
+on:
+  schedule:
+    - cron: "0 12 * * 3"
+  workflow_dispatch:
+
+jobs:
+  build_publish:
+    name: "Build"
+    runs-on: docker
+    container:
+      image: archlinux:latest
+      options: --privileged
+      env:
+        DOCKER_HOST: "tcp://docker:2375"
+        DOCKER_TLS_CERTDIR: ""
+    services:
+        docker:
+          image: docker:28.3.1-dind
+          options: --privileged -- dockerd -H tcp://0.0.0.0:2375 --tls=false
+          env:
+            DOCKER_TLS_CERTDIR: ""
+    steps:
+      - name: Install deps
+        run: pacman --noconfirm -Sy git nodejs curl docker docker-buildx
+
+      - name: Wait for Docker daemon
+        run: |
+          for i in {1..30}; do
+            if docker info > /dev/null 2>&1; then
+              echo "Docker is ready!"
+              break
+            fi
+            echo "Waiting for Docker to be ready..."
+            sleep 1
+          done
+
+      - name: Check Docker service logs
+        run: curl -s docker:2375/version || echo "dockerd might have failed"
+
+      - name: Docker check
+        run: docker info
+
+      - uses: actions/checkout@v4
+
+      - name: Login to the registry
+        run: docker login -u Land -p ${{ secrets.CODEBERG_TOKEN }} codeberg.org
+
+      - name: Build
+        run: cd docker && docker build -t codeberg.org/land/tempsystem .
+
+      - name: Push
+        run: cd docker && docker push codeberg.org/land/tempsystem

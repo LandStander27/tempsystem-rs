@@ -1,0 +1,26 @@
+export ZSH="$HOME/.oh-my-zsh"
+
+ZSH_THEME="gentoo"
+
+plugins=(
+	git
+	zsh-syntax-highlighting
+	zsh-autosuggestions
+	fzf
+	sudo
+	archlinux
+)
+
+if [ -e "$ZSH/oh-my-zsh.sh" ]; then
+	source $ZSH/oh-my-zsh.sh
+fi
+
+export TERM=xterm-256color
+# alias aur-install="yay --sync --needed --noconfirm --noprogressbar"
+
+if [[ "$SHOW_WELCOME" == "true" ]]; then
+	figlet Welcome | lolcat
+	echo The base image for tempsystem is archlinux:latest, so:
+	echo - - use \"sudo pacman -S program\" to install archlinux packages.
+	echo - - use \"yay -S program\" to install AUR packages.
+fi

@@ -362,7 +362,7 @@ impl Context {
 		let mut stream = docker.create_image(
 			Some(
 				bollard::query_parameters::CreateImageOptionsBuilder::default()
-					.from_image("codeberg.org/land/tempsystem:latest")
+					.from_image("codeberg.org/land/tempsystem-rs:latest")
 					.build(),
 			),
 			None,
@@ -427,7 +427,7 @@ impl Context {
 			.create_container(
 				None::<bollard::query_parameters::CreateContainerOptions>,
 				bollard::models::ContainerCreateBody {
-					image: Some("codeberg.org/land/tempsystem:latest".to_string()),
+					image: Some("codeberg.org/land/tempsystem-rs:latest".to_string()),
 					tty: Some(true),
 					hostname: Some("tempsystem".into()),
 					network_disabled: Some(network_disabled),
