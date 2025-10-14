@@ -3,15 +3,25 @@ name = "tempsystem-rs"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+generators = ["dep:clap_complete", "dep:clap_mangen"]
+
 [dependencies]
 bollard = "0.19.3"
 clap = { version = "4.5.48", features = ["derive"] }
+clap_complete = { version = "4.5.58", optional = true }
+clap_mangen = { version = "0.2.29", optional = true }
 colorize = "0.1.0"
 futures-util = "0.3.31"
 indicatif = { version = "0.18.0", features = ["tokio"] }
 termion = "4.0.5"
 thiserror = "2.0.17"
-tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1.47.1", features = [
+	"macros",
+	"rt-multi-thread",
+	"signal",
+] }
 tokio-util = "0.7.16"
 
 version = { path = "./version" }

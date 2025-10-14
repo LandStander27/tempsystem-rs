@@ -34,6 +34,14 @@ struct Args {
 
 	#[arg(default_value = "/usr/bin/zsh", help = "command to execute in container, then exit")]
 	command: Vec<String>,
+
+	#[cfg(feature = "generators")]
+	#[arg(long = "generate-man")]
+	generate_man: String,
+
+	#[cfg(feature = "generators")]
+	#[arg(value_enum, long = "generate-shell")]
+	generate_shell: clap_complete::Shell,
 }
 
 mod docker;
@@ -55,6 +63,20 @@ macro_rules! print_error {
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
 	let args = Args::parse();
+
+	#[cfg(feature = "generators")]
+	{
+		use clap::CommandFactory;
+		let man = clap_mangen::Man::new(Args::command());
+		let mut buffer: Vec<u8> = Default::default();
+		man.render(&mut buffer).unwrap();
+		std::fs::write(args.generate_man, buffer).unwrap();
+
+		use clap_complete::{Generator, Shell, generate};
+		clap_complete::aot::generate(args.generate_shell, &mut Args::command(), Args::command().get_name().to_string(), &mut std::io::stdout());
+
+		return;
+	}
 
 	let token = CancellationToken::new();
 	let token_clone = token.clone();
