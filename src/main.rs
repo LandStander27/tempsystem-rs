@@ -75,7 +75,7 @@ async fn main() -> std::process::ExitCode {
 		use clap_complete::{Generator, Shell, generate};
 		clap_complete::aot::generate(args.generate_shell, &mut Args::command(), Args::command().get_name().to_string(), &mut std::io::stdout());
 
-		return;
+		return 0.into();
 	}
 
 	let token = CancellationToken::new();
