@@ -1305,7 +1305,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tempsystem-rs"
+name = "tempsystem"
 version = "0.1.0"
 dependencies = [
  "bollard",
