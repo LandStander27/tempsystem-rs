@@ -4,7 +4,7 @@ use clap::Parser;
 #[command(name = "tempsystem", version = version::version)]
 #[command(about = "Create and enter a completely temporary system, whenever you want!", long_about = None)]
 struct Args {
-	#[arg(short, long, help = "run a system update before entering")]
+	#[arg(short, long, help = "run a system update before entering; can fix issues with package install fails")]
 	update_system: bool,
 
 	#[arg(short, long, help = "mount system root as read only (cannot be used with --extra-packages)")]

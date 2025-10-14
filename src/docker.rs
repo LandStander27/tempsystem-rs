@@ -39,9 +39,8 @@ pub enum Error {
 	#[error("exec was expected to be attached")]
 	ExpectedAttached,
 
-	#[error("exec was expected to be detached")]
-	ExpectedDetached,
-
+	// #[error("exec was expected to be detached")]
+	// ExpectedDetached,
 	#[error("could not recv terminal size: {0}")]
 	TerminalSize(std::io::Error),
 
@@ -59,6 +58,9 @@ pub enum Error {
 	#[error("could not write to stdout: {0}")]
 	StdoutWrite(std::io::Error),
 
+	#[error("could not format stdout to buffer: {0}")]
+	StdoutFmtWrite(std::fmt::Error),
+
 	#[error("could flush stdout: {0}")]
 	StdoutFlush(std::io::Error),
 
@@ -71,8 +73,8 @@ pub enum Error {
 	#[error("package `{0}` does not exist")]
 	PackageDNE(String),
 
-	#[error("failed to install package: {0}")]
-	PackageInstall(i64),
+	#[error("failed to install package: {0}; {1}")]
+	PackageInstall(i64, String),
 
 	#[error("failed to update system: {0}")]
 	SystemUpdate(i64),
@@ -84,8 +86,14 @@ pub struct Context {
 	container_id: String,
 }
 
-unsafe impl Send for Context {}
-unsafe impl Sync for Context {}
+fn get_error_from_pacman(s: &str) -> String {
+	return s
+		.split("\n")
+		.filter_map(|s| s.strip_prefix("error: "))
+		.last()
+		.unwrap_or_default()
+		.to_string();
+}
 
 impl Context {
 	pub fn connect(&mut self) -> Result<(), Error> {
@@ -104,16 +112,16 @@ impl Context {
 			let exec_id = self
 				.create_exec(format!("/bin/pacman -Ssq \"^{pkg}$\""), false)
 				.await?;
-			let status = self.start_exec(&exec_id, false).await?;
+			let (status, _) = self.start_exec(&exec_id, false).await?;
 			if status != 0 {
 				return Err(Error::PackageDNE(pkg.to_string()));
 			}
 			let exec_id = self
 				.create_exec(format!("/bin/sudo /bin/pacman -S --needed --noconfirm {pkg}"), false)
 				.await?;
-			let status = self.start_exec(&exec_id, false).await?;
+			let (status, output) = self.start_exec(&exec_id, false).await?;
 			if status != 0 {
-				return Err(Error::PackageInstall(status));
+				return Err(Error::PackageInstall(status, get_error_from_pacman(&output.unwrap_or_default())));
 			}
 		}
 
@@ -127,16 +135,16 @@ impl Context {
 			let exec_id = self
 				.create_exec(format!("/bin/yay --aur -Ssq \"^{pkg}$\""), false)
 				.await?;
-			let status = self.start_exec(&exec_id, false).await?;
+			let (status, _) = self.start_exec(&exec_id, false).await?;
 			if status != 0 {
 				return Err(Error::PackageDNE(pkg.to_string()));
 			}
 			let exec_id = self
 				.create_exec(format!("/bin/yay --sync --needed --noconfirm --noprogressbar {pkg}"), false)
 				.await?;
-			let status = self.start_exec(&exec_id, false).await?;
+			let (status, output) = self.start_exec(&exec_id, false).await?;
 			if status != 0 {
-				return Err(Error::PackageInstall(status));
+				return Err(Error::PackageInstall(status, get_error_from_pacman(&output.unwrap_or_default())));
 			}
 		}
 
@@ -147,7 +155,7 @@ impl Context {
 		let exec_id = self
 			.create_exec("/bin/sudo /bin/pacman -Syu --noconfirm".into(), false)
 			.await?;
-		let status = self.start_exec(&exec_id, false).await?;
+		let (status, _) = self.start_exec(&exec_id, false).await?;
 		if status != 0 {
 			return Err(Error::SystemUpdate(status));
 		}
@@ -220,7 +228,7 @@ impl Context {
 		};
 		spinner.finish_and_clear();
 		m.remove(&spinner);
-		let exit_code = self.start_exec(&exec_id, true).await?;
+		let (exit_code, _) = self.start_exec(&exec_id, true).await?;
 
 		let spinner = m.add(ProgressBar::new_spinner().with_style(ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.blue} {msg}...").unwrap()));
 		{
@@ -258,8 +266,8 @@ impl Context {
 			.create_exec(
 				&self.container_id,
 				bollard::models::ExecConfig {
-					attach_stdout: Some(attach),
-					attach_stderr: Some(attach),
+					attach_stdout: Some(true),
+					attach_stderr: Some(true),
 					attach_stdin: Some(attach),
 					user: Some("tempsystem".into()),
 					tty: Some(attach),
@@ -273,9 +281,9 @@ impl Context {
 		return Ok(exec);
 	}
 
-	async fn start_exec(&self, exec_id: &str, attach: bool) -> Result<i64, Error> {
+	async fn start_exec(&self, exec_id: &str, attach: bool) -> Result<(i64, Option<String>), Error> {
 		let docker = self.get_docker()?;
-		if attach {
+		let output = if attach {
 			let (mut output, mut input) = if let bollard::exec::StartExecResults::Attached { output, input } = docker
 				.start_exec(exec_id, None)
 				.await
@@ -321,30 +329,32 @@ impl Context {
 					.map_err(Error::StdoutWrite)?;
 				stdout.flush().map_err(Error::StdoutFlush)?;
 			}
-		} else if let bollard::exec::StartExecResults::Detached = docker
+
+			None
+		} else if let bollard::exec::StartExecResults::Attached { mut output, .. } = docker
 			.start_exec(exec_id, None)
 			.await
 			.map_err(Error::ExecStart)?
 		{
-			return Err(Error::ExpectedDetached);
-		} else {
-			loop {
-				let inspect = docker
-					.inspect_exec(exec_id)
-					.await
-					.map_err(Error::ExecInspect)?;
-				if !inspect.running.unwrap() {
-					break;
-				}
-				tokio::time::sleep(Duration::from_millis(300)).await;
+			use std::fmt::Write;
+
+			let mut stdout = String::new();
+			while let Some(Ok(output)) = output.next().await {
+				stdout
+					.write_fmt(format_args!("{output}"))
+					.map_err(Error::StdoutFmtWrite)?;
 			}
-		}
+
+			Some(stdout)
+		} else {
+			return Err(Error::ExpectedAttached);
+		};
 
 		let inspect = docker
 			.inspect_exec(exec_id)
 			.await
 			.map_err(Error::ExecInspect)?;
-		return Ok(inspect.exit_code.unwrap_or(0));
+		return Ok((inspect.exit_code.unwrap_or(0), output));
 	}
 
 	async fn pull_image(&self, m: &MultiProgress) -> Result<(), Error> {
