@@ -10,6 +10,7 @@ USER tempsystem
 COPY ./setup-inside.sh /tmp/setup.sh
 COPY ./makepkg.conf /etc/makepkg.conf
 COPY ./pacman.conf /etc/pacman.conf
+COPY ./command-not-found.zsh /tmp/command-not-found.zsh
 USER root
 RUN chmod +rx /tmp/setup.sh
 USER tempsystem

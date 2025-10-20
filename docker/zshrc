@@ -1,3 +1,4 @@
+# ZSH setup
 export ZSH="$HOME/.oh-my-zsh"
 
 ZSH_THEME="gentoo"
@@ -9,15 +10,25 @@ plugins=(
 	fzf
 	sudo
 	archlinux
+	rust
+	command-not-found
 )
 
 if [ -e "$ZSH/oh-my-zsh.sh" ]; then
 	source $ZSH/oh-my-zsh.sh
 fi
 
+# For unsupported terminals
 export TERM=xterm-256color
-# alias aur-install="yay --sync --needed --noconfirm --noprogressbar"
 
+# Common aliases
+alias rm="rm -v"
+alias cp="cp -v"
+alias mv="mv -v"
+alias ls="eza --icons=auto"
+alias lss="eza --sort=date --icons=auto"
+
+# Show the welcome message
 if [[ "$SHOW_WELCOME" == "true" ]]; then
 	figlet Welcome | lolcat
 	echo The base image for tempsystem is archlinux:latest, so:
