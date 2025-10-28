@@ -78,6 +78,12 @@ pub enum Error {
 
 	#[error("failed to update system: {0}")]
 	SystemUpdate(i64),
+
+	#[error("failed to add the Chaotic-AUR: {0}")]
+	ChaoticAUR(i64),
+
+	#[error("failed to add landware: {0}")]
+	Landware(i64),
 }
 
 #[derive(Default)]
@@ -105,14 +111,17 @@ impl Context {
 		return self.docker.as_ref().ok_or(Error::NotConnected);
 	}
 
-	async fn install_packages(&self, spinner: &ProgressBar, current_task: usize, total_tasks: usize, packages: &str) -> Result<(), Error> {
+	async fn install_packages(&self, verbose: bool, spinner: &ProgressBar, current_task: usize, total_tasks: usize, packages: &str) -> Result<(), Error> {
 		for (i, pkg) in packages.split_whitespace().enumerate() {
 			spinner.set_message(format!("Installing {pkg}"));
 			spinner.set_prefix(format!("[{}/{total_tasks}]", i + current_task));
 			let exec_id = self
 				.create_exec(format!("/bin/pacman -Ssq \"^{pkg}$\""), false)
 				.await?;
-			let (status, _) = self.start_exec(&exec_id, false).await?;
+			let (status, output) = self.start_exec(&exec_id, false).await?;
+			if verbose {
+				println!("{}", output.unwrap());
+			}
 			if status != 0 {
 				return Err(Error::PackageDNE(pkg.to_string()));
 			}
@@ -120,6 +129,9 @@ impl Context {
 				.create_exec(format!("/bin/sudo /bin/pacman -S --needed --noconfirm {pkg}"), false)
 				.await?;
 			let (status, output) = self.start_exec(&exec_id, false).await?;
+			if verbose {
+				println!("{}", output.as_ref().unwrap());
+			}
 			if status != 0 {
 				return Err(Error::PackageInstall(status, get_error_from_pacman(&output.unwrap_or_default())));
 			}
@@ -128,14 +140,17 @@ impl Context {
 		return Ok(());
 	}
 
-	async fn install_aur_packages(&self, spinner: &ProgressBar, current_task: usize, total_tasks: usize, packages: &str) -> Result<(), Error> {
+	async fn install_aur_packages(&self, verbose: bool, spinner: &ProgressBar, current_task: usize, total_tasks: usize, packages: &str) -> Result<(), Error> {
 		for (i, pkg) in packages.split_whitespace().enumerate() {
 			spinner.set_message(format!("Installing {pkg} from AUR"));
 			spinner.set_prefix(format!("[{}/{total_tasks}]", i + current_task));
 			let exec_id = self
 				.create_exec(format!("/bin/yay --aur -Ssq \"^{pkg}$\""), false)
 				.await?;
-			let (status, _) = self.start_exec(&exec_id, false).await?;
+			let (status, output) = self.start_exec(&exec_id, false).await?;
+			if verbose {
+				println!("{}", output.unwrap());
+			}
 			if status != 0 {
 				return Err(Error::PackageDNE(pkg.to_string()));
 			}
@@ -143,6 +158,9 @@ impl Context {
 				.create_exec(format!("/bin/yay --sync --needed --noconfirm --noprogressbar {pkg}"), false)
 				.await?;
 			let (status, output) = self.start_exec(&exec_id, false).await?;
+			if verbose {
+				println!("{}", output.as_ref().unwrap());
+			}
 			if status != 0 {
 				return Err(Error::PackageInstall(status, get_error_from_pacman(&output.unwrap_or_default())));
 			}
@@ -151,11 +169,14 @@ impl Context {
 		return Ok(());
 	}
 
-	async fn update_system(&self) -> Result<(), Error> {
+	async fn update_system(&self, verbose: bool) -> Result<(), Error> {
 		let exec_id = self
 			.create_exec("/bin/sudo /bin/pacman -Syu --noconfirm".into(), false)
 			.await?;
-		let (status, _) = self.start_exec(&exec_id, false).await?;
+		let (status, output) = self.start_exec(&exec_id, false).await?;
+		if verbose {
+			println!("{}", output.unwrap());
+		}
 		if status != 0 {
 			return Err(Error::SystemUpdate(status));
 		}
@@ -176,41 +197,97 @@ impl Context {
 			.as_ref()
 			.unwrap_or(&"".to_string())
 			.split_whitespace()
-			.count() + args.update_system as usize;
+			.count() + (args.update_system || args.chaotic_aur) as usize
+			+ args.landware as usize
+			+ args.chaotic_aur as usize;
+		let mut cur = 1;
 		let spinner = m.add(ProgressBar::new_spinner().with_style(ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.blue} {msg}...").unwrap()));
 		{
 			spinner.set_message("Downloading image");
-			spinner.set_prefix(format!("[1/{total}]"));
+			spinner.set_prefix(format!("[{cur}/{total}]"));
 			spinner.enable_steady_tick(Duration::from_millis(50));
 			self.pull_image(&m).await?;
+			cur += 1;
 		}
 		self.container_id = {
 			spinner.set_message("Creating system");
-			spinner.set_prefix(format!("[2/{total}]"));
+			spinner.set_prefix(format!("[{cur}/{total}]"));
+			cur += 1;
 			self.create_container(args.no_network, args.privileged, args.ro_root, args.ro_cwd, !args.disable_cwd_mount)
 				.await?
 		};
 		{
 			spinner.set_message("Starting system");
-			spinner.set_prefix(format!("[3/{total}]"));
+			spinner.set_prefix(format!("[{cur}/{total}]"));
 			self.start_container().await?;
+			cur += 1;
 		}
-		if args.update_system {
+		if args.chaotic_aur {
+			spinner.set_message("Adding Chaotic-AUR");
+			spinner.set_prefix(format!("[{cur}/{total}]"));
+			let exec_id = self
+				.create_exec(
+					r#"
+					sudo pacman-key --init;
+					sudo pacman-key --populate;
+					sudo pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com;
+					sudo pacman-key --lsign-key 3056513887B78AEB;
+					sudo pacman -U 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst';
+					yes | sudo pacman -U 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst';
+					printf '\n\n# Added by tempsystem\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist' | sudo tee -a /etc/pacman.conf"#
+						.into(),
+					false,
+				)
+				.await?;
+			let (status, output) = self.start_exec(&exec_id, false).await?;
+			if args.verbose {
+				println!("{}", output.unwrap());
+			}
+			if status != 0 {
+				return Err(Error::ChaoticAUR(status));
+			}
+			cur += 1;
+		}
+		if args.landware {
+			spinner.set_message("Adding landware");
+			spinner.set_prefix(format!("[{cur}/{total}]"));
+			let exec_id = self
+				.create_exec(
+					r#"
+					printf '\n\n# Added by tempsystem\n[landware]\nServer = https://repo.kage.sj.strangled.net/landware/x86_64\nSigLevel = DatabaseNever PackageNever TrustedOnly' | sudo tee -a /etc/pacman.conf"#
+						.into(),
+					false,
+				)
+				.await?;
+			let (status, output) = self.start_exec(&exec_id, false).await?;
+			if args.verbose {
+				println!("{}", output.unwrap());
+			}
+			if status != 0 {
+				return Err(Error::Landware(status));
+			}
+			cur += 1;
+		}
+		if args.update_system || args.chaotic_aur {
 			spinner.set_message("Updating system");
-			spinner.set_prefix(format!("[4/{total}]"));
-			self.update_system().await?;
+			spinner.set_prefix(format!("[{cur}/{total}]"));
+			self.update_system(args.verbose).await?;
+			cur += 1;
 		}
 		if let Some(pkgs) = &args.extra_packages {
-			self.install_packages(&spinner, 4 + args.update_system as usize, total, pkgs)
+			self.install_packages(args.verbose, &spinner, cur, total, pkgs)
 				.await?;
+			cur += pkgs.split_whitespace().count();
 		}
 		if let Some(pkgs) = &args.extra_aur_packages {
-			self.install_aur_packages(&spinner, 5 + args.update_system as usize, total, pkgs)
+			self.install_aur_packages(args.verbose, &spinner, cur, total, pkgs)
 				.await?;
+			cur += pkgs.split_whitespace().count();
 		}
 		let exec_id = {
 			spinner.set_message("Executing");
-			spinner.set_prefix(format!("[{}/{total}]", total - 1));
+			spinner.set_prefix(format!("[{cur}/{total}]"));
+			// cur += 1;
 			if args.command.len() == 1 && args.command[0] == "/usr/bin/zsh" {
 				self.create_exec("SHOW_WELCOME=true /usr/bin/zsh".into(), true)
 					.await?

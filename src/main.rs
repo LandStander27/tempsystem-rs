@@ -4,6 +4,9 @@ use clap::Parser;
 #[command(name = "tempsystem", version = version::version)]
 #[command(about = "Create and enter a completely temporary system, whenever you want!", long_about = None)]
 struct Args {
+	#[arg(long, help = "show more verbose output")]
+	verbose: bool,
+
 	#[arg(short, long, help = "run a system update before entering; can fix issues with package install fails")]
 	update_system: bool,
 
@@ -31,6 +34,12 @@ struct Args {
 
 	#[arg(long, help = "give extended privileges to the system")]
 	privileged: bool,
+
+	#[arg(long, help = "Add the Chaotic-AUR to the system (forces --update-system)")]
+	chaotic_aur: bool,
+
+	#[arg(long, help = "Add the landware repo to the system")]
+	landware: bool,
 
 	#[arg(default_value = "/usr/bin/zsh", help = "command to execute in container, then exit")]
 	command: Vec<String>,
@@ -94,7 +103,7 @@ async fn main() -> std::process::ExitCode {
 	tokio::select! {
 		_ = token.cancelled() => {
 			if let Err(e) = context.delete_container().await {
-				print_error!("could not delete system after error", e);
+				print_error!("could not delete system after cancel (could be that it did not create the system yet)", e);
 			}
 		}
 		ret = context.perform_all_enter(&args) => {
