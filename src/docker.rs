@@ -76,20 +76,32 @@ pub enum Error {
 	#[error("failed to install package: {0}; {1}")]
 	PackageInstall(i64, String),
 
-	#[error("failed to update system: {0}")]
-	SystemUpdate(i64),
+	#[error("failed to update system: {0}; {1}")]
+	SystemUpdate(i64, String),
 
-	#[error("failed to add the Chaotic-AUR: {0}")]
-	ChaoticAUR(i64),
+	#[error("failed to add the Chaotic-AUR: {0}; {1}")]
+	ChaoticAUR(i64, String),
 
 	#[error("failed to add landware: {0}")]
 	Landware(i64),
+
+	#[error("failed to update pkgfile database: {0}")]
+	Pkgfile(i64),
 }
 
 #[derive(Default)]
 pub struct Context {
 	docker: Option<Docker>,
 	container_id: String,
+}
+
+fn get_error_from_pacman_key(s: &str) -> String {
+	return s
+		.split("\n")
+		.filter_map(|s| s.strip_prefix("==> ERROR: "))
+		.last()
+		.unwrap_or_default()
+		.to_string();
 }
 
 fn get_error_from_pacman(s: &str) -> String {
@@ -99,6 +111,15 @@ fn get_error_from_pacman(s: &str) -> String {
 		.last()
 		.unwrap_or_default()
 		.to_string();
+}
+
+fn get_error_from_either(s: &str) -> String {
+	let ret = get_error_from_pacman(s);
+	if !ret.is_empty() {
+		return ret;
+	}
+
+	return get_error_from_pacman_key(s);
 }
 
 impl Context {
@@ -175,10 +196,10 @@ impl Context {
 			.await?;
 		let (status, output) = self.start_exec(&exec_id, false).await?;
 		if verbose {
-			println!("{}", output.unwrap());
+			println!("{}", output.as_ref().unwrap());
 		}
 		if status != 0 {
-			return Err(Error::SystemUpdate(status));
+			return Err(Error::SystemUpdate(status, get_error_from_pacman(&output.unwrap_or_default())));
 		}
 
 		return Ok(());
@@ -228,12 +249,12 @@ impl Context {
 			let exec_id = self
 				.create_exec(
 					r#"
-					sudo pacman-key --init;
-					sudo pacman-key --populate;
-					sudo pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com;
-					sudo pacman-key --lsign-key 3056513887B78AEB;
-					sudo pacman -U 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst';
-					yes | sudo pacman -U 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst';
+					sudo pacman-key --init &&
+					sudo pacman-key --populate &&
+					sudo pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com &&
+					sudo pacman-key --lsign-key 3056513887B78AEB &&
+					sudo pacman -U 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' &&
+					yes | sudo pacman -U 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst' &&
 					printf '\n\n# Added by tempsystem\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist' | sudo tee -a /etc/pacman.conf"#
 						.into(),
 					false,
@@ -241,10 +262,10 @@ impl Context {
 				.await?;
 			let (status, output) = self.start_exec(&exec_id, false).await?;
 			if args.verbose {
-				println!("{}", output.unwrap());
+				println!("{}", output.as_ref().unwrap());
 			}
 			if status != 0 {
-				return Err(Error::ChaoticAUR(status));
+				return Err(Error::ChaoticAUR(status, get_error_from_either(&output.unwrap_or_default())));
 			}
 			cur += 1;
 		}
@@ -272,6 +293,18 @@ impl Context {
 			spinner.set_message("Updating system");
 			spinner.set_prefix(format!("[{cur}/{total}]"));
 			self.update_system(args.verbose).await?;
+			cur += 1;
+
+			spinner.set_message("Updating pkgfile database");
+			spinner.set_prefix(format!("[{cur}/{total}]"));
+			let exec_id = self.create_exec("sudo pkgfile -u".into(), false).await?;
+			let (status, output) = self.start_exec(&exec_id, false).await?;
+			if args.verbose {
+				println!("{}", output.unwrap());
+			}
+			if status != 0 {
+				return Err(Error::Pkgfile(status));
+			}
 			cur += 1;
 		}
 		if let Some(pkgs) = &args.extra_packages {

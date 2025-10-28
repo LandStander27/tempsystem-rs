@@ -110,6 +110,7 @@ async fn main() -> std::process::ExitCode {
 			match ret {
 				Err(e) => {
 					print_error!(e);
+					print_error!("note: running with --verbose can help in determining error cause");
 					if let Err(e) = context.delete_container().await {
 						print_error!("could not delete system after error", e);
 					}
