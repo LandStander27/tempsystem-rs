@@ -7,8 +7,18 @@ struct Args {
 	#[arg(long, help = "show more verbose output")]
 	verbose: bool,
 
-	#[arg(short, long, help = "run a system update before entering; can fix issues with package install fails")]
+	#[arg(
+		short,
+		long,
+		help = "run a system update before entering; can fix issues with package install fails (recommended with --chaotic-aur or --landware)"
+	)]
 	update_system: bool,
+
+	#[arg(
+		long,
+		help = "update the pkgfile database; recommended with --update-system, --chaotic-aur, or --landware, but this can take a while"
+	)]
+	update_pkgfile: bool,
 
 	#[arg(short, long, help = "mount system root as read only (cannot be used with --extra-packages)")]
 	ro_root: bool,
@@ -35,7 +45,7 @@ struct Args {
 	#[arg(long, help = "give extended privileges to the system")]
 	privileged: bool,
 
-	#[arg(long, help = "Add the Chaotic-AUR to the system (forces --update-system)")]
+	#[arg(long, help = "Add the Chaotic-AUR to the system")]
 	chaotic_aur: bool,
 
 	#[arg(long, help = "Add the landware repo to the system")]

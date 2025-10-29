@@ -218,7 +218,8 @@ impl Context {
 			.as_ref()
 			.unwrap_or(&"".to_string())
 			.split_whitespace()
-			.count() + (args.update_system || args.chaotic_aur) as usize
+			.count() + args.update_system as usize
+			+ args.update_pkgfile as usize
 			+ args.landware as usize
 			+ args.chaotic_aur as usize;
 		let mut cur = 1;
@@ -253,9 +254,10 @@ impl Context {
 					sudo pacman-key --populate &&
 					sudo pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com &&
 					sudo pacman-key --lsign-key 3056513887B78AEB &&
-					sudo pacman -U 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' &&
-					yes | sudo pacman -U 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst' &&
-					printf '\n\n# Added by tempsystem\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist' | sudo tee -a /etc/pacman.conf"#
+					sudo pacman -U --needed --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' &&
+					yes | sudo pacman -U --needed --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst' &&
+					printf '\n\n# Added by tempsystem\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist' | sudo tee -a /etc/pacman.conf && 
+					sudo pacman -Sy --noconfirm"#
 						.into(),
 					false,
 				)
@@ -275,7 +277,8 @@ impl Context {
 			let exec_id = self
 				.create_exec(
 					r#"
-					printf '\n\n# Added by tempsystem\n[landware]\nServer = https://repo.kage.sj.strangled.net/landware/x86_64\nSigLevel = DatabaseNever PackageNever TrustedOnly' | sudo tee -a /etc/pacman.conf"#
+					printf '\n\n# Added by tempsystem\n[landware]\nServer = https://repo.kage.sj.strangled.net/landware/x86_64\nSigLevel = DatabaseNever PackageNever TrustedOnly' | sudo tee -a /etc/pacman.conf &&
+					sudo pacman -Sy --noconfirm"#
 						.into(),
 					false,
 				)
@@ -289,12 +292,13 @@ impl Context {
 			}
 			cur += 1;
 		}
-		if args.update_system || args.chaotic_aur {
+		if args.update_system {
 			spinner.set_message("Updating system");
 			spinner.set_prefix(format!("[{cur}/{total}]"));
 			self.update_system(args.verbose).await?;
 			cur += 1;
-
+		}
+		if args.update_pkgfile {
 			spinner.set_message("Updating pkgfile database");
 			spinner.set_prefix(format!("[{cur}/{total}]"));
 			let exec_id = self.create_exec("sudo pkgfile -u".into(), false).await?;
