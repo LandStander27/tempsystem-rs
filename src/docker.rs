@@ -1,7 +1,7 @@
 use std::{
 	collections::HashMap,
 	fs::File,
-	io::{Cursor, Read, Write},
+	io::{Read, Write},
 	time::Duration,
 };
 
