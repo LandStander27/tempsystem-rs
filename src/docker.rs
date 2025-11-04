@@ -1,17 +1,19 @@
 use std::{
 	collections::HashMap,
-	io::{Read, Write},
+	fs::File,
+	io::{Cursor, Read, Write},
 	time::Duration,
 };
 
-use bollard::Docker;
+use bollard::{Docker, query_parameters::UploadToContainerOptions};
 use futures_util::StreamExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use tar::Builder;
 use termion::{async_stdin, raw::IntoRawMode, terminal_size};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 
-use crate::{Args, print_error};
+use crate::{Args, ZshHistorySync, print_error};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -50,8 +52,6 @@ pub enum Error {
 	#[error("could not inspect exec: {0}")]
 	ExecInspect(bollard::errors::Error),
 
-	// #[error("could not get exit code")]
-	// ExecExitcode,
 	#[error("could not set raw mode: {0}")]
 	Rawmode(std::io::Error),
 
@@ -87,6 +87,18 @@ pub enum Error {
 
 	#[error("failed to update pkgfile database: {0}")]
 	Pkgfile(i64),
+
+	#[error("could not find user's home directory")]
+	HomeDir,
+
+	#[error("could not open ~/.zsh_history: {0}")]
+	OpenHistory(std::io::Error),
+
+	#[error("could not add ~/.zsh_history to tar archive: {0}")]
+	Tar(std::io::Error),
+
+	#[error("could not upload archive to container: {0}")]
+	ContainerUpload(bollard::errors::Error),
 }
 
 #[derive(Default)]
@@ -205,6 +217,29 @@ impl Context {
 		return Ok(());
 	}
 
+	async fn copy_file(&self, host_src: &str, guest_dest: &str) -> Result<(), Error> {
+		let docker = self.get_docker()?;
+		let mut v = vec![];
+		let mut builder = Builder::new(&mut v);
+		builder
+			.append_file(".zsh_history", &mut File::open(host_src).map_err(Error::OpenHistory)?)
+			.map_err(Error::Tar)?;
+		drop(builder);
+		docker
+			.upload_to_container(
+				&self.container_id,
+				Some(UploadToContainerOptions {
+					path: guest_dest.into(),
+					..Default::default()
+				}),
+				bollard::body_full(v.into()),
+			)
+			.await
+			.map_err(Error::ContainerUpload)?;
+
+		return Ok(());
+	}
+
 	pub async fn perform_all_enter(&mut self, args: &Args) -> Result<i64, Error> {
 		let m = MultiProgress::new();
 		let total = 5
@@ -235,8 +270,15 @@ impl Context {
 			spinner.set_message("Creating system");
 			spinner.set_prefix(format!("[{cur}/{total}]"));
 			cur += 1;
-			self.create_container(args.no_network, args.privileged, args.ro_root, args.ro_cwd, !args.disable_cwd_mount)
-				.await?
+			self.create_container(
+				args.no_network,
+				args.privileged,
+				args.ro_root,
+				args.ro_cwd,
+				!args.disable_cwd_mount,
+				args.sync_zsh_history == ZshHistorySync::Mount,
+			)
+			.await?
 		};
 		{
 			spinner.set_message("Starting system");
@@ -324,7 +366,20 @@ impl Context {
 		let exec_id = {
 			spinner.set_message("Executing");
 			spinner.set_prefix(format!("[{cur}/{total}]"));
-			// cur += 1;
+			if args.sync_zsh_history == ZshHistorySync::Copy {
+				self.copy_file(
+					&format!(
+						"{}/.zsh_history",
+						std::env::home_dir()
+							.ok_or(Error::HomeDir)?
+							.canonicalize()
+							.map_err(|_| Error::HomeDir)?
+							.display()
+					),
+					"/home/tempsystem",
+				)
+				.await?;
+			}
 			if args.command.len() == 1 && args.command[0] == "/usr/bin/zsh" {
 				self.create_exec("SHOW_WELCOME=true /usr/bin/zsh".into(), true)
 					.await?
@@ -526,17 +581,26 @@ impl Context {
 		return Ok(());
 	}
 
-	async fn create_container(&self, network_disabled: bool, privileged: bool, ro_root: bool, ro_cwd: bool, mount_cwd: bool) -> Result<String, Error> {
+	async fn create_container(&self, network_disabled: bool, privileged: bool, ro_root: bool, ro_cwd: bool, mount_cwd: bool, mount_history: bool) -> Result<String, Error> {
 		let docker = self.get_docker()?;
-		let binds = if mount_cwd {
-			if ro_cwd {
-				vec![format!("{}:/home/tempsystem/work:ro", std::env::current_dir().map_err(Error::GetCWD)?.display())]
-			} else {
-				vec![format!("{}:/home/tempsystem/work", std::env::current_dir().map_err(Error::GetCWD)?.display())]
-			}
-		} else {
-			vec![]
-		};
+		let mut binds = vec![];
+		if mount_cwd {
+			binds.push(format!(
+				"{}:/home/tempsystem/work{}",
+				std::env::current_dir().map_err(Error::GetCWD)?.display(),
+				if ro_cwd { "ro" } else { "" }
+			));
+		}
+		if mount_history {
+			binds.push(format!(
+				"{}/.zsh_history:/home/tempsystem/.zsh_history",
+				std::env::home_dir()
+					.ok_or(Error::HomeDir)?
+					.canonicalize()
+					.map_err(|_| Error::HomeDir)?
+					.display()
+			));
+		}
 		let id = docker
 			.create_container(
 				None::<bollard::query_parameters::CreateContainerOptions>,

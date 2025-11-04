@@ -1,4 +1,17 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+
+#[derive(ValueEnum, Debug, Clone, Default, PartialEq)]
+enum ZshHistorySync {
+	/// do not sync zsh histories at all
+	#[default]
+	None,
+
+	/// mount the ~/.zsh_history file directly, creating a two way sync
+	Mount,
+
+	/// copy the host ~/.zsh_history on creation, creating a one way sync
+	Copy,
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "tempsystem", version = version::version)]
@@ -50,6 +63,9 @@ struct Args {
 
 	#[arg(long, help = "Add the landware repo to the system")]
 	landware: bool,
+
+	#[arg(long, help = "Sync the ZSH command history between host and system", default_value = "none")]
+	sync_zsh_history: ZshHistorySync,
 
 	#[arg(default_value = "/usr/bin/zsh", help = "command to execute in container, then exit")]
 	command: Vec<String>,

@@ -15,6 +15,7 @@ clap_mangen = { version = "0.2.29", optional = true }
 colorize = "0.1.0"
 futures-util = "0.3.31"
 indicatif = { version = "0.18.0", features = ["tokio"] }
+tar = "0.4.44"
 termion = "4.0.5"
 thiserror = "2.0.17"
 tokio = { version = "1.47.1", features = [
