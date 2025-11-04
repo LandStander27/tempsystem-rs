@@ -8,7 +8,8 @@ run() {
 }
 
 setup() {
-	run sudo pacman --needed --noconfirm -Sy zsh curl git figlet lolcat fzf openssl sudo base-devel pkgfile eza
+	# pcre2 is for git
+	run sudo pacman --needed --noconfirm -Sy zsh curl git figlet lolcat fzf openssl sudo base-devel pkgfile eza pcre2
 	run sudo mkdir -p /usr/share/doc/pkgfile
 	run sudo mv /tmp/command-not-found.zsh /usr/share/doc/pkgfile/command-not-found.zsh
 	run sudo pkgfile --update
