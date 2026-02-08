@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "generators", allow(unreachable_code))]
+
 use clap::{Parser, ValueEnum};
 
 #[derive(ValueEnum, Debug, Clone, Default, PartialEq)]
