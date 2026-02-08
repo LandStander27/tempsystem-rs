@@ -588,7 +588,7 @@ impl Context {
 			binds.push(format!(
 				"{}:/home/tempsystem/work{}",
 				std::env::current_dir().map_err(Error::GetCWD)?.display(),
-				if ro_cwd { "ro" } else { "" }
+				if ro_cwd { ":ro" } else { "" }
 			));
 		}
 		if mount_history {
