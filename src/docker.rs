@@ -29,6 +29,9 @@ pub enum Error {
 	#[error("could not create container: {0}")]
 	ContainerCreate(bollard::errors::Error),
 
+	#[error("could not set container memory limit: {0}")]
+	MemoryLimitSet(bollard::errors::Error),
+
 	#[error("could not start container: {0}")]
 	ContainerStart(bollard::errors::Error),
 
@@ -277,6 +280,8 @@ impl Context {
 				args.ro_cwd,
 				!args.disable_cwd_mount,
 				args.sync_zsh_history == ZshHistorySync::Mount,
+				args.restrict_cpu,
+				args.restrict_memory,
 			)
 			.await?
 		};
@@ -581,7 +586,18 @@ impl Context {
 		return Ok(());
 	}
 
-	async fn create_container(&self, network_disabled: bool, privileged: bool, ro_root: bool, ro_cwd: bool, mount_cwd: bool, mount_history: bool) -> Result<String, Error> {
+	#[allow(clippy::too_many_arguments)]
+	async fn create_container(
+		&self,
+		network_disabled: bool,
+		privileged: bool,
+		ro_root: bool,
+		ro_cwd: bool,
+		mount_cwd: bool,
+		mount_history: bool,
+		cpus: Option<u8>,
+		memory: Option<usize>,
+	) -> Result<String, Error> {
 		let docker = self.get_docker()?;
 		let mut binds = vec![];
 		if mount_cwd {
@@ -614,6 +630,7 @@ impl Context {
 						privileged: Some(privileged),
 						readonly_rootfs: Some(ro_root),
 						binds: Some(binds),
+						cpuset_cpus: cpus.map(|x| format!("0-{}", x - 1)),
 						..Default::default()
 					}),
 					..Default::default()
@@ -622,6 +639,20 @@ impl Context {
 			.await
 			.map_err(Error::ContainerCreate)?
 			.id;
+
+		if let Some(memory) = memory {
+			docker
+				.update_container(
+					&id,
+					bollard::models::ContainerUpdateBody {
+						memory: Some(memory as i64 * 1024 * 1024),
+						memory_swap: Some(memory as i64 * 1024 * 1024),
+						..Default::default()
+					},
+				)
+				.await
+				.map_err(Error::MemoryLimitSet)?;
+		}
 
 		return Ok(id);
 	}

@@ -61,6 +61,12 @@ struct Args {
 	#[arg(long, help = "Add the Chaotic-AUR to the system")]
 	chaotic_aur: bool,
 
+	#[arg(long, help = "Restrict usable cpu cores")]
+	restrict_cpu: Option<u8>,
+
+	#[arg(long, help = "Restrict usable memory (MB)")]
+	restrict_memory: Option<usize>,
+
 	#[arg(long, help = "Add the landware repo to the system")]
 	landware: bool,
 
