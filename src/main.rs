@@ -115,6 +115,7 @@ async fn main() -> std::process::ExitCode {
 		man.render(&mut buffer).unwrap();
 		std::fs::write(args.generate_man, buffer).unwrap();
 
+		#[allow(unused)]
 		use clap_complete::{Generator, Shell, generate};
 		clap_complete::aot::generate(args.generate_shell, &mut Args::command(), Args::command().get_name().to_string(), &mut std::io::stdout());
 
