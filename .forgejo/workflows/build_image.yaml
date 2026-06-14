@@ -11,16 +11,6 @@ jobs:
     runs-on: docker
     container:
       image: archlinux:latest
-      options: --privileged
-      env:
-        DOCKER_HOST: "tcp://docker:2375"
-        DOCKER_TLS_CERTDIR: ""
-    services:
-        docker:
-          image: docker:28.3.1-dind
-          options: --privileged -- dockerd -H tcp://0.0.0.0:2375 --tls=false
-          env:
-            DOCKER_TLS_CERTDIR: ""
     steps:
       - name: Install deps
         run: pacman --noconfirm -Sy git nodejs curl docker docker-buildx
@@ -45,10 +35,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Login to the registry
-        run: docker login -u Land -p ${{ secrets.CODEBERG_TOKEN }} codeberg.org
+        run: docker login -u landsj -p ${{ secrets.DOCKERHUB }}
 
       - name: Build
-        run: cd docker && docker build -t codeberg.org/land/tempsystem .
+        run: cd docker && docker build -t landsj/tempsystem .
 
       - name: Push
-        run: cd docker && docker push codeberg.org/land/tempsystem
+        run: cd docker && docker push landsj/tempsystem
