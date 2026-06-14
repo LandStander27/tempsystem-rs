@@ -1,8 +1,8 @@
 # tempsystem-rs
 - Quickly create a temporary system (docker container) for testing purposes.
-- Container based on `archlinux:latest`.
+- Container based on `archlinux:latest`, located [here](https://hub.docker.com/r/landsj/tempsystem).
 - Difference between just using `archlinux:latest` with Docker CLI: Includes sane defaults, pretty terminal theme/plugins, etc.
-- Complete rewrite of my [old project](https://codeberg.org/Land/tempsystem)
+- Complete rewrite of my [old project](https://codeberg.org/Land/tempsystem).
 
 ## Usage
 ### Using my repo (For Arch-based distros)
