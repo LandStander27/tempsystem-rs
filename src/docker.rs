@@ -621,7 +621,7 @@ impl Context {
 			.create_container(
 				None::<bollard::query_parameters::CreateContainerOptions>,
 				bollard::models::ContainerCreateBody {
-					image: Some("codeberg.org/land/tempsystem:latest".to_string()),
+					image: Some("landsj/tempsystem:latest".to_string()),
 					tty: Some(true),
 					hostname: Some("tempsystem".into()),
 					network_disabled: Some(network_disabled),
