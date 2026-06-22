@@ -10,35 +10,15 @@ jobs:
     name: "Build"
     runs-on: docker
     container:
-      image: archlinux:latest
+      image: ghcr.io/catthehacker/ubuntu:act-latest
     steps:
-      - name: Install deps
-        run: pacman --noconfirm -Sy git nodejs curl docker docker-buildx
-
-      - name: Wait for Docker daemon
-        run: |
-          for i in {1..30}; do
-            if docker info > /dev/null 2>&1; then
-              echo "Docker is ready!"
-              break
-            fi
-            echo "Waiting for Docker to be ready..."
-            sleep 1
-          done
-
-      - name: Check Docker service logs
-        run: curl -s docker:2375/version || echo "dockerd might have failed"
-
-      - name: Docker check
-        run: docker info
-
+      - run: apt-get update && apt-get install buildah ca-certificates -y
       - uses: actions/checkout@v4
-
-      - name: Login to the registry
-        run: docker login -u landsj -p ${{ secrets.DOCKERHUB }}
-
-      - name: Build
-        run: cd docker && docker build -t landsj/tempsystem .
-
-      - name: Push
-        run: cd docker && docker push landsj/tempsystem
+      - uses: https://codeberg.org/actions/buildah-simple@main
+        with:
+          tag: "docker.io/landsj/tempsystem:latest"
+          context: .
+          push: true
+          username: "landsj"
+          password: ${{ secrets.DOCKERHUB }}
+          registry: "docker.io"
