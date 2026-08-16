@@ -324,7 +324,7 @@ impl Context {
 			let exec_id = self
 				.create_exec(
 					r#"
-					printf '\n\n# Added by tempsystem\n[landware]\nServer = https://repo.kage.sj.strangled.net/landware/x86_64\nSigLevel = DatabaseNever PackageNever TrustedOnly' | sudo tee -a /etc/pacman.conf &&
+					printf '\n\n# Added by tempsystem\n[landware]\nServer = https://repo.landsj.dev/landware/x86_64\nSigLevel = DatabaseNever PackageNever TrustedOnly' | sudo tee -a /etc/pacman.conf &&
 					sudo pacman -Sy --noconfirm"#
 						.into(),
 					false,
