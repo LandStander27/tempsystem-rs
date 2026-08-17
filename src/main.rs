@@ -103,6 +103,40 @@ macro_rules! print_error {
 	};
 }
 
+async fn group_check() {
+	let groups = match nix::unistd::getgroups() {
+		Ok(o) => o,
+		Err(e) => {
+			print_error!("could not get user's groups", e);
+			return;
+		}
+	};
+
+	let mut in_group = false;
+	for group in groups {
+		let group = match nix::unistd::Group::from_gid(group) {
+			Ok(Some(o)) => o,
+			Ok(None) => {
+				print_error!("docker group does not exist");
+				return;
+			}
+			Err(e) => {
+				print_error!("user has an invalid gid", e);
+				return;
+			}
+		};
+
+		if group.name == "docker" {
+			in_group = true;
+			break;
+		}
+	}
+
+	if !in_group {
+		print_error!("user is not in `docker` group; almost guaranteed to fail");
+	}
+}
+
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
 	let args = Args::parse();
@@ -121,6 +155,8 @@ async fn main() -> std::process::ExitCode {
 
 		return 0.into();
 	}
+
+	group_check().await;
 
 	let token = CancellationToken::new();
 	let token_clone = token.clone();

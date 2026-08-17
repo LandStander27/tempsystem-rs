@@ -23,8 +23,8 @@ pub enum Error {
 	#[error("inner error: docker not connected")]
 	NotConnected,
 
-	#[error("could not create image: {0}")]
-	ImageCreate(bollard::errors::Error),
+	#[error("could not pull landsj/tempsystem: {0}")]
+	ImagePull(bollard::errors::Error),
 
 	#[error("could not create container: {0}")]
 	ContainerCreate(bollard::errors::Error),
@@ -547,7 +547,7 @@ impl Context {
 			.progress_chars("##-");
 		let mut bars: HashMap<String, ProgressBar> = HashMap::new();
 		while let Some(update) = stream.next().await {
-			let update = update.map_err(Error::ImageCreate)?;
+			let update = update.map_err(Error::ImagePull)?;
 			if let Some(id) = update.id
 				&& id != "latest"
 			{
@@ -625,7 +625,7 @@ impl Context {
 					tty: Some(true),
 					hostname: Some("tempsystem".into()),
 					network_disabled: Some(network_disabled),
-					host_config: Some(bollard::secret::HostConfig {
+					host_config: Some(bollard::models::HostConfig {
 						dns: Some(vec!["1.1.1.1".into(), "1.0.0.1".into()]),
 						privileged: Some(privileged),
 						readonly_rootfs: Some(ro_root),
