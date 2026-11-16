@@ -2,7 +2,7 @@ FROM docker.io/archlinux:latest
 
 # ARG USER=user
 
-RUN pacman --noprogressbar --needed --noconfirm -Sy sudo zsh
+RUN pacman --noprogressbar --needed --noconfirm -Syu sudo zsh
 RUN groupadd sudo
 RUN useradd -m -G sudo -s /bin/zsh tempsystem
 RUN echo "%sudo	ALL=(ALL:ALL) NOPASSWD: ALL" >> /etc/sudoers
