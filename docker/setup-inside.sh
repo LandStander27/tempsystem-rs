@@ -23,8 +23,8 @@ setup() {
 
 	run git clone https://github.com/zsh-users/zsh-autosuggestions ~/.oh-my-zsh/custom/plugins/zsh-autosuggestions
 	run git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ~/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting
-	
-	run tee -a "OPTIONS=(strip docs !libtool !staticlibs emptydirs zipman purge !debug !lto !autodeps)" /etc/makepkg.conf
+
+	run sudo tee -a 'OPTIONS=(strip docs !libtool !staticlibs emptydirs zipman purge !debug !lto !autodeps)' /etc/makepkg.conf
 	run git clone https://aur.archlinux.org/yay.git ~/.yay-source
 	run makepkg -s --rmdeps --noprogressbar --noconfirm --needed --dir ~/.yay-source
 	run sudo pacman --upgrade --needed --noconfirm --noprogressbar ~/.yay-source/*.pkg.*
